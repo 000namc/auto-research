@@ -1,0 +1,34 @@
+# auto-research API container.
+#
+# Build context: project root (`docker compose -f build/docker-compose.yml build`).
+# Source code is bind-mounted at runtime → image only carries the deps.
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# tini for PID 1 signal handling, tmux for the agent control client
+# (uses a shared socket volume to talk to the agents container's tmux server).
+RUN apt-get update && apt-get install -y --no-install-recommends tini tmux \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY src/api/requirements.txt /tmp/requirements.txt
+RUN pip install -r /tmp/requirements.txt
+
+# Container path: /app/data/auto-research/ (uniformity convention shared with
+# the agents container). identity.md uses relative paths so the same files
+# work in both the host and the containers.
+ENV PYTHONPATH=/app/data/auto-research/src
+WORKDIR /app/data/auto-research
+
+EXPOSE 8000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["uvicorn", "api.main:app", \
+     "--host", "127.0.0.1", \
+     "--port", "8000", \
+     "--reload", \
+     "--reload-dir", "/app/data/auto-research/src"]

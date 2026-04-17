@@ -1,0 +1,53 @@
+# auto-research agents container.
+#
+# Hosts the tmux server + N Claude Code sessions (one per agent role).
+# Claude Code is installed INSIDE this image via the official shell installer,
+# so the container is portable across host OSes (Mac, Linux, WSL). Only the
+# credentials (~/.claude, ~/.claude.json — plain JSON) are bind-mounted from
+# the host for auth reuse.
+#
+# Container path: /app/data/auto-research/ (uniformity convention).
+# Host's `.claude.json` is bind-mounted RW, so when claude is first launched
+# inside this container the trust dialog appears once → entrypoint sends Enter
+# automatically → host config gets the new path added → subsequent spawns are
+# clean. identity.md uses RELATIVE paths so it works in both host and container
+# regardless of cwd.
+
+FROM ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tmux \
+    tini \
+    ca-certificates \
+    curl \
+    procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Use the base image's pre-existing `ubuntu` user (uid 1000, gid 1000).
+# The host user's uid is injected at runtime via compose `user: "${HOST_UID}:${HOST_GID}"`,
+# so the in-container username is cosmetic — `ubuntu` keeps things minimal.
+
+# Pre-create the tmux socket directory with the strict permissions tmux
+# requires (0700, owned by uid 1000). When the `tmux-socket` named volume is
+# first mounted here, docker initializes the volume with these perms.
+RUN mkdir -p /tmp/tmux-1000 \
+ && chown 1000:1000 /tmp/tmux-1000 \
+ && chmod 0700 /tmp/tmux-1000
+
+USER ubuntu
+ENV HOME=/home/ubuntu \
+    USER=ubuntu \
+    PATH=/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# Install Claude Code via the official shell installer. Lays down:
+#   /home/ubuntu/.local/bin/claude             (symlink)
+#   /home/ubuntu/.local/share/claude/versions/ (versioned binaries)
+# Runs as `ubuntu` so the files end up owned by uid 1000. The installer is
+# non-interactive and pinned to `stable` for reproducible builds.
+RUN curl -fsSL https://claude.ai/install.sh | bash -s stable \
+ && /home/ubuntu/.local/bin/claude --version
+
+WORKDIR /app/data/auto-research
+
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["bash", "/app/data/auto-research/bin/agents-entrypoint.sh"]

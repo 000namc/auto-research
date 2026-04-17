@@ -1,0 +1,22 @@
+# auto-research web (Vite dev server) container.
+#
+# Build context: project root.
+# package.json is COPYed in so node_modules is baked into the image; the rest
+# of src/web/ is bind-mounted at runtime for HMR.
+
+FROM node:20-alpine
+
+RUN apk add --no-cache tini
+
+WORKDIR /app
+
+# Install deps as root during build. The host user (1000:1000) later mounts
+# /app over this directory; node_modules survives via a named volume in compose.
+# chown so the host user can write Vite's optimize cache (.vite/deps_temp_*).
+COPY src/web/package.json src/web/package-lock.json* ./
+RUN npm install --no-audit --no-fund \
+ && chown -R 1000:1000 /app
+
+EXPOSE 5173
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["npm", "run", "dev"]

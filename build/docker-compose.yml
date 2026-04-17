@@ -1,0 +1,102 @@
+# auto-research dev stack.
+#
+# Run from project root:
+#     docker compose -f build/docker-compose.yml up -d --build
+#
+# Configuration: copy `.env.example` to `.env` at the repo root and edit the
+# host-side paths to match your machine. Compose auto-loads `.env`. The
+# defaults assume:
+#   - The repo lives at `..` relative to this file (i.e. you run compose from
+#     the repo root with `-f build/docker-compose.yml`)
+#   - Claude Code is installed via the official installer and your config
+#     lives at `$HOME/.claude` and `$HOME/.claude.json`
+#   - Your host UID/GID is 1000 (override with HOST_UID/HOST_GID if not)
+#
+# Path convention: every container mounts the project at /app/data/auto-research/
+# (uniformity). identity.md and code use relative paths so files work in both
+# host and containers regardless of cwd.
+#
+# Network: api/web use `network_mode: host` (CLAUDE.md "Webapp 접근" rules —
+# bind to 127.0.0.1, no external exposure). agents uses default bridge so
+# claude inside it has outbound internet for the Anthropic API but doesn't
+# expose anything.
+#
+# Architecture (all sub-agent work containerized):
+#   - agents:  tmux server + 4 Claude Code sessions (orchestrator + 3 workers)
+#   - api:     FastAPI + tmux client (talks to agents' tmux via shared socket)
+#   - web:     Vite dev server
+# The host runs only the *designer* Claude Code session (this conversation)
+# and the docker daemon. Everything else is in containers.
+
+name: auto-research
+
+services:
+  # ── Agents: tmux server + 4 Claude Code sessions ──────────────────────────
+  agents:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.agents
+    image: auto-research-agents:dev
+    container_name: auto-research-agents
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      HOME: /home/ubuntu
+      USER: ubuntu
+      PATH: /home/ubuntu/.local/bin:/usr/local/bin:/usr/bin:/bin
+    volumes:
+      # Project (uniform container path)
+      - ${PROJECT_ROOT:-..}:/app/data/auto-research
+      # Claude Code binary lives INSIDE the image (see Dockerfile.agents). We
+      # only bind-mount the credentials/config (plain JSON) from the host so
+      # auth is reused across image rebuilds and — importantly — so the
+      # container works on Mac hosts where the host's claude binary is
+      # Darwin, not Linux.
+      - ${CLAUDE_HOME:-${HOME}/.claude}:/home/ubuntu/.claude
+      - ${CLAUDE_CONFIG:-${HOME}/.claude.json}:/home/ubuntu/.claude.json
+      # Shared tmux socket (api uses tmux client to control sessions inside this container)
+      - tmux-socket:/tmp/tmux-1000
+    working_dir: /app/data/auto-research
+    restart: unless-stopped
+
+  # ── API: FastAPI + tmux client ────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.api
+    image: auto-research-api:dev
+    container_name: auto-research-api
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      CARDS_ROOT: /app/data/auto-research
+      PYTHONPATH: /app/data/auto-research/src
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${PROJECT_ROOT:-..}:/app/data/auto-research
+      # Same tmux socket as agents → tmux client here can control agents' sessions.
+      - tmux-socket:/tmp/tmux-1000
+    working_dir: /app/data/auto-research
+    depends_on:
+      - agents
+    restart: unless-stopped
+
+  # ── Web: Vite dev server ──────────────────────────────────────────────────
+  web:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.web
+    image: auto-research-web:dev
+    container_name: auto-research-web
+    network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    volumes:
+      - ${PROJECT_ROOT:-..}/src/web:/app
+      - web_node_modules:/app/node_modules
+    working_dir: /app
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  tmux-socket:
+  web_node_modules:

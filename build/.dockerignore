@@ -1,0 +1,15 @@
+# Build context = project root. Keep it small.
+.claude/
+.git/
+projects/*/runs/
+projects/*/results/
+projects/*/checkpoints/
+**/__pycache__/
+**/node_modules/
+**/.pytest_cache/
+**/.mypy_cache/
+**/dist/
+*.log
+*.swp
+.DS_Store
+reference.pdf
